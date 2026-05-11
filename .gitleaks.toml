@@ -1,0 +1,21 @@
+# gitleaks configuration for crig.
+# Extends the default ruleset shipped with gitleaks.
+# See: https://github.com/gitleaks/gitleaks#configuration
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Project-wide allowlist"
+
+# Do not scan generated/vendored files or binary assets.
+paths = [
+    '''(^|/)Cargo\.lock$''',
+    '''(^|/)target/''',
+    '''(^|/)node_modules/''',
+    '''(^|/)docs/.*\.(png|jpg|jpeg|gif|svg)$''',
+]
+
+# Example placeholders that appear in README / docs should not trip the scanner.
+# Add specific strings here if you hit false positives.
+regexes = []

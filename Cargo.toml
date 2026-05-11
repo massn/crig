@@ -1,0 +1,26 @@
+[package]
+name = "crig"
+version = "0.1.0"
+edition = "2021"
+description = "construct-rig: CLI tool for managing LLM and Agent configurations"
+license = "MIT"
+repository = "https://github.com/massn/crig"
+
+[[bin]]
+name = "crig"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+ratatui = "0.26"
+crossterm = "0.27"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+anyhow = "1.0"
+inquire = "0.7"
+serde_json = "1.0"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

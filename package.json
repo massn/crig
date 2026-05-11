@@ -1,0 +1,30 @@
+{
+  "name": "crig",
+  "version": "0.1.0",
+  "description": "construct-rig: CLI tool for managing LLM and Agent configurations",
+  "main": "index.js",
+  "bin": {
+    "crig": "./bin/crig"
+  },
+  "scripts": {
+    "install": "node install.js",
+    "build": "cargo build --release"
+  },
+  "keywords": [
+    "cli",
+    "llm",
+    "agent",
+    "claude",
+    "configuration"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/massn/crig.git"
+  },
+  "files": [
+    "bin/",
+    "install.js"
+  ]
+}

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Pre-commit hook: scan staged changes for secrets with gitleaks.
+#
+# Setup (run once per clone):
+#   git config core.hooksPath .githooks
+#
+# Bypass in emergencies (discouraged):
+#   git commit --no-verify
+
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+[pre-commit] gitleaks is not installed.
+
+Install it:
+  macOS:  brew install gitleaks
+  Other:  https://github.com/gitleaks/gitleaks#installing
+
+Then retry the commit. To bypass this check once, use: git commit --no-verify
+EOF
+    exit 1
+fi
+
+# --staged: only scan what is staged for this commit.
+# --redact: do not print the actual secret value in logs.
+# --verbose: show what was scanned.
+if ! gitleaks git --staged --redact --verbose; then
+    cat >&2 <<'EOF'
+
+[pre-commit] gitleaks detected potential secrets in your staged changes.
+
+If this is a false positive, add an allowlist entry to .gitleaks.toml
+or annotate the line with `# gitleaks:allow`.
+
+To bypass once (discouraged): git commit --no-verify
+EOF
+    exit 1
+fi
