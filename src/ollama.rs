@@ -24,22 +24,46 @@ pub enum StartOutcome {
 
 /// Parse `http(s)://host:port` into `host:port` suitable for `OLLAMA_HOST`
 /// and for TCP probing. Returns `(host, port)`.
+///
+/// Default port depends on scheme: 443 for `https://`, 11434 otherwise.
 fn parse_endpoint(endpoint: &str) -> Result<(String, u16)> {
-    let without_scheme = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .unwrap_or(endpoint);
+    let (is_https, without_scheme) = if let Some(rest) = endpoint.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = endpoint.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        (false, endpoint)
+    };
     // Drop any trailing path.
     let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let default_port = if is_https { 443 } else { 11434 };
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => (
             h.to_string(),
             p.parse::<u16>()
                 .with_context(|| format!("Invalid port in endpoint: {}", endpoint))?,
         ),
-        None => (authority.to_string(), 11434),
+        None => (authority.to_string(), default_port),
     };
     Ok((host, port))
+}
+
+/// Returns true if `host` refers to the local machine (loopback or unspecified
+/// address). For remote hosts crig must not try to spawn `ollama serve` or
+/// invoke `ollama show`/`pull`, since those are local operations.
+pub fn is_local_host(host: &str) -> bool {
+    matches!(
+        host,
+        "localhost" | "127.0.0.1" | "::1" | "0.0.0.0" | "[::1]" | "[::]"
+    )
+}
+
+/// Convenience: parse the endpoint and answer the locality question.
+pub fn endpoint_is_local(endpoint: &str) -> bool {
+    match parse_endpoint(endpoint) {
+        Ok((host, _)) => is_local_host(&host),
+        Err(_) => false,
+    }
 }
 
 /// Returns true if a TCP connection to the endpoint's host:port succeeds.

@@ -80,20 +80,32 @@ impl LLMBackend for OllamaBackend {
     fn configure(&self, cmd: &mut Command, construct_name: &str) -> Result<ConfigureOutcome> {
         println!(">> LLM: {} @ {} (Ollama)", self.model, self.endpoint);
 
-        // Ensure ollama is reachable, starting it if necessary.
-        let handle = match ollama::start(&self.endpoint)? {
-            ollama::StartOutcome::AlreadyRunning => {
-                println!(">> Ollama is already running — leaving it alone.");
-                OllamaHandle::None
+        let handle = if ollama::endpoint_is_local(&self.endpoint) {
+            // Local Ollama: start `ollama serve` if needed, and ensure the model.
+            let handle = match ollama::start(&self.endpoint)? {
+                ollama::StartOutcome::AlreadyRunning => {
+                    println!(">> Ollama is already running — leaving it alone.");
+                    OllamaHandle::None
+                }
+                ollama::StartOutcome::Started(child) => {
+                    println!(">> Started `ollama serve` for this session.");
+                    OllamaHandle::OwnedChild(child)
+                }
+            };
+            ollama::ensure_model(&self.endpoint, &self.model)?;
+            handle
+        } else {
+            // Remote endpoint: do not spawn ollama or pull models locally.
+            // Just verify the server is reachable.
+            if !ollama::is_running(&self.endpoint) {
+                anyhow::bail!(
+                    "Remote Ollama endpoint {} is not reachable. Check the URL, your network, and that the server is up.",
+                    self.endpoint
+                );
             }
-            ollama::StartOutcome::Started(child) => {
-                println!(">> Started `ollama serve` for this session.");
-                OllamaHandle::OwnedChild(child)
-            }
+            println!(">> Remote endpoint reachable — skipping local serve / model pull.");
+            OllamaHandle::None
         };
-
-        // Ensure the requested model is present locally; pull on demand.
-        ollama::ensure_model(&self.endpoint, &self.model)?;
 
         let settings_path = generate_ollama_settings(
             construct_name,
