@@ -278,12 +278,13 @@ fn render_llm_box(f: &mut Frame, construct: &Construct, area: Rect) {
                 Line::from(vec![Span::raw(key_status)]),
             ]
         }
-        LLMConfig::LocalLLM { endpoint, model } | LLMConfig::Ollama { endpoint, model } => {
-            let header = match &construct.llm_config {
-                LLMConfig::Ollama { .. } => "🦙 Ollama",
-                _ => "🖥️  Local LLM",
+        LLMConfig::LocalLLM { endpoint, model }
+        | LLMConfig::Ollama { endpoint, model, .. } => {
+            let (header, api_key) = match &construct.llm_config {
+                LLMConfig::Ollama { api_key, .. } => ("🦙 Ollama", api_key.as_ref()),
+                _ => ("🖥️  Local LLM", None),
             };
-            vec![
+            let mut lines = vec![
                 Line::from(vec![Span::styled(
                     header,
                     Style::default()
@@ -308,7 +309,21 @@ fn render_llm_box(f: &mut Frame, construct: &Construct, area: Rect) {
                     endpoint.as_str(),
                     Style::default().fg(Color::Yellow),
                 )]),
-            ]
+            ];
+            if matches!(&construct.llm_config, LLMConfig::Ollama { .. }) {
+                let (icon, status) = if api_key.is_some() {
+                    ("🔐", "Config")
+                } else {
+                    ("🔑", "Default")
+                };
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{} API Token", icon),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]));
+                lines.push(Line::from(vec![Span::raw(status)]));
+            }
+            lines
         }
     };
 

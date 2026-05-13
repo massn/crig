@@ -45,6 +45,8 @@ pub enum LLMConfig {
     Ollama {
         endpoint: String,
         model: String,
+        #[serde(default)]
+        api_key: Option<String>,
     },
 }
 

@@ -179,7 +179,18 @@ pub fn configure() -> Result<()> {
 
             let model = Text::new("Model name:").with_default("llama3").prompt()?;
 
-            LLMConfig::Ollama { endpoint, model }
+            let api_key = Text::new("API token (leave empty if not required):")
+                .with_help_message(
+                    "Used as ANTHROPIC_AUTH_TOKEN. Defaults to \"ollama\" when empty.",
+                )
+                .prompt_skippable()?
+                .and_then(|s| if s.is_empty() { None } else { Some(s) });
+
+            LLMConfig::Ollama {
+                endpoint,
+                model,
+                api_key,
+            }
         }
         _ => {
             let endpoint = Text::new("Local LLM endpoint:")

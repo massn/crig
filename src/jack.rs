@@ -41,6 +41,7 @@ struct LocalLLMBackend {
 struct OllamaBackend {
     endpoint: String,
     model: String,
+    api_key: Option<String>,
 }
 
 impl LLMBackend for ClaudeApiBackend {
@@ -61,7 +62,8 @@ impl LLMBackend for LocalLLMBackend {
         println!(">> LLM: {} @ {}", self.model, self.endpoint);
         println!(">> Generating temporary settings.json for local LLM...");
 
-        let settings_path = generate_ollama_settings(construct_name, &self.endpoint, &self.model)?;
+        let settings_path =
+            generate_ollama_settings(construct_name, &self.endpoint, &self.model, None)?;
         println!(">> Settings file: {}", settings_path.display());
         println!(">> Model: {}", self.model);
 
@@ -93,7 +95,12 @@ impl LLMBackend for OllamaBackend {
         // Ensure the requested model is present locally; pull on demand.
         ollama::ensure_model(&self.endpoint, &self.model)?;
 
-        let settings_path = generate_ollama_settings(construct_name, &self.endpoint, &self.model)?;
+        let settings_path = generate_ollama_settings(
+            construct_name,
+            &self.endpoint,
+            &self.model,
+            self.api_key.as_deref(),
+        )?;
         println!(">> Settings file: {}", settings_path.display());
         println!(">> Model: {}", self.model);
 
@@ -116,9 +123,10 @@ fn backend_from_config(llm_config: &LLMConfig) -> Box<dyn LLMBackend> {
             endpoint: endpoint.clone(),
             model: model.clone(),
         }),
-        LLMConfig::Ollama { endpoint, model } => Box::new(OllamaBackend {
+        LLMConfig::Ollama { endpoint, model, api_key } => Box::new(OllamaBackend {
             endpoint: endpoint.clone(),
             model: model.clone(),
+            api_key: api_key.clone(),
         }),
     }
 }
@@ -194,7 +202,12 @@ fn clear_bedrock_env(cmd: &mut Command) {
     cmd.env_remove("CLAUDE_CODE_USE_BEDROCK");
 }
 
-fn generate_ollama_settings(profile_name: &str, endpoint: &str, model: &str) -> Result<PathBuf> {
+fn generate_ollama_settings(
+    profile_name: &str,
+    endpoint: &str,
+    model: &str,
+    api_key: Option<&str>,
+) -> Result<PathBuf> {
     let config_dir = crate::config::get_config_dir()?;
     let settings_path = config_dir.join(format!("settings_{}.json", profile_name));
 
@@ -204,10 +217,12 @@ fn generate_ollama_settings(profile_name: &str, endpoint: &str, model: &str) -> 
         format!("{}:latest", model)
     };
 
+    let auth_token = api_key.unwrap_or("ollama");
+
     let settings = json!({
         "model": &full_model,
         "env": {
-            "ANTHROPIC_AUTH_TOKEN": "ollama",
+            "ANTHROPIC_AUTH_TOKEN": auth_token,
             "ANTHROPIC_API_KEY": "",
             "ANTHROPIC_BASE_URL": endpoint,
             "CLAUDE_CODE_USE_BEDROCK": "0"
