@@ -1,7 +1,4 @@
 use anyhow::{Context, Result};
-use serde_json::json;
-use std::fs;
-use std::path::PathBuf;
 use std::process::{Child, Command};
 
 use crate::config::{load_config, get_active_construct, LLMConfig, Construct};
@@ -17,15 +14,10 @@ enum OllamaHandle {
     OwnedChild(Child),
 }
 
-/// Return value bundles the temporary settings path to clean up *and* any
-/// ollama process we started so the caller can tear both down together.
-struct ConfigureOutcome {
-    settings_path: Option<PathBuf>,
-    ollama: OllamaHandle,
-}
-
 trait LLMBackend {
-    fn configure(&self, cmd: &mut Command, construct_name: &str) -> Result<ConfigureOutcome>;
+    /// Configure the spawned agent process for this backend. Returns any
+    /// ollama process we own so the caller can tear it down at exit.
+    fn configure(&self, cmd: &mut Command, construct_name: &str) -> Result<OllamaHandle>;
 }
 
 struct ClaudeApiBackend {
@@ -45,7 +37,7 @@ struct OllamaBackend {
 }
 
 impl LLMBackend for ClaudeApiBackend {
-    fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<ConfigureOutcome> {
+    fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<OllamaHandle> {
         clear_bedrock_env(cmd);
         set_no_bedrock(cmd);
         if let Some(key) = &self.api_key {
@@ -53,31 +45,21 @@ impl LLMBackend for ClaudeApiBackend {
         }
         cmd.arg("--model").arg(&self.model);
         println!(">> LLM: {} (Cloud)", self.model);
-        Ok(ConfigureOutcome { settings_path: None, ollama: OllamaHandle::None })
+        Ok(OllamaHandle::None)
     }
 }
 
 impl LLMBackend for LocalLLMBackend {
-    fn configure(&self, cmd: &mut Command, construct_name: &str) -> Result<ConfigureOutcome> {
+    fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<OllamaHandle> {
         println!(">> LLM: {} @ {}", self.model, self.endpoint);
-        println!(">> Generating temporary settings.json for local LLM...");
-
-        let settings_path =
-            generate_ollama_settings(construct_name, &self.endpoint, &self.model, None)?;
-        println!(">> Settings file: {}", settings_path.display());
-        println!(">> Model: {}", self.model);
-
-        cmd.arg("--settings").arg(&settings_path);
-
-        Ok(ConfigureOutcome {
-            settings_path: Some(settings_path),
-            ollama: OllamaHandle::None,
-        })
+        apply_anthropic_env(cmd, &self.endpoint, None);
+        cmd.arg("--model").arg(ollama::normalize_model(&self.model));
+        Ok(OllamaHandle::None)
     }
 }
 
 impl LLMBackend for OllamaBackend {
-    fn configure(&self, cmd: &mut Command, construct_name: &str) -> Result<ConfigureOutcome> {
+    fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<OllamaHandle> {
         println!(">> LLM: {} @ {} (Ollama)", self.model, self.endpoint);
 
         let handle = if ollama::endpoint_is_local(&self.endpoint) {
@@ -107,22 +89,22 @@ impl LLMBackend for OllamaBackend {
             OllamaHandle::None
         };
 
-        let settings_path = generate_ollama_settings(
-            construct_name,
-            &self.endpoint,
-            &self.model,
-            self.api_key.as_deref(),
-        )?;
-        println!(">> Settings file: {}", settings_path.display());
-        println!(">> Model: {}", self.model);
+        apply_anthropic_env(cmd, &self.endpoint, self.api_key.as_deref());
+        cmd.arg("--model").arg(ollama::normalize_model(&self.model));
 
-        cmd.arg("--settings").arg(&settings_path);
-
-        Ok(ConfigureOutcome {
-            settings_path: Some(settings_path),
-            ollama: handle,
-        })
+        Ok(handle)
     }
+}
+
+/// Point Claude Code at a non-Anthropic OpenAI-compatible endpoint by setting
+/// the env vars it reads on startup. Using direct env vars (instead of writing
+/// a `--settings` JSON file) avoids leaving secrets on disk and avoids
+/// overriding the user's persistent `~/.claude/settings.json`.
+fn apply_anthropic_env(cmd: &mut Command, endpoint: &str, api_key: Option<&str>) {
+    cmd.env("ANTHROPIC_BASE_URL", endpoint);
+    cmd.env("ANTHROPIC_AUTH_TOKEN", api_key.unwrap_or("ollama"));
+    cmd.env("ANTHROPIC_API_KEY", "");
+    cmd.env("CLAUDE_CODE_USE_BEDROCK", "0");
 }
 
 fn backend_from_config(llm_config: &LLMConfig) -> Box<dyn LLMBackend> {
@@ -177,7 +159,7 @@ fn establish_connection(construct: &Construct, args: &[String]) -> Result<()> {
     let mut cmd = Command::new(&construct.agent_path);
     let backend = backend_from_config(&construct.llm_config);
 
-    let outcome = backend.configure(&mut cmd, &construct.name)?;
+    let ollama_handle = backend.configure(&mut cmd, &construct.name)?;
 
     cmd.args(args);
 
@@ -190,11 +172,7 @@ fn establish_connection(construct: &Construct, args: &[String]) -> Result<()> {
         .status()
         .context("Connection failed - interface unreachable")?;
 
-    // Tear down any resources we created for this session, in reverse order.
-    if let Some(path) = outcome.settings_path {
-        let _ = fs::remove_file(path);
-    }
-    if let OllamaHandle::OwnedChild(child) = outcome.ollama {
+    if let OllamaHandle::OwnedChild(child) = ollama_handle {
         println!(">> Stopping ollama (started by this session)...");
         let _ = ollama::stop_child(child);
     }
@@ -214,36 +192,3 @@ fn clear_bedrock_env(cmd: &mut Command) {
     cmd.env_remove("CLAUDE_CODE_USE_BEDROCK");
 }
 
-fn generate_ollama_settings(
-    profile_name: &str,
-    endpoint: &str,
-    model: &str,
-    api_key: Option<&str>,
-) -> Result<PathBuf> {
-    let config_dir = crate::config::get_config_dir()?;
-    let settings_path = config_dir.join(format!("settings_{}.json", profile_name));
-
-    let full_model = if model.contains(':') {
-        model.to_string()
-    } else {
-        format!("{}:latest", model)
-    };
-
-    let auth_token = api_key.unwrap_or("ollama");
-
-    let settings = json!({
-        "model": &full_model,
-        "env": {
-            "ANTHROPIC_AUTH_TOKEN": auth_token,
-            "ANTHROPIC_API_KEY": "",
-            "ANTHROPIC_BASE_URL": endpoint,
-            "CLAUDE_CODE_USE_BEDROCK": "0"
-        }
-    });
-
-    let settings_str = serde_json::to_string_pretty(&settings)?;
-    fs::write(&settings_path, settings_str)
-        .context("Failed to write settings.json")?;
-
-    Ok(settings_path)
-}

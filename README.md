@@ -137,6 +137,9 @@ agent_path = "claude"
 type = "ollama"
 endpoint = "http://localhost:11434"
 model = "llama3"
+# Optional. Sent as ANTHROPIC_AUTH_TOKEN to the agent. Defaults to "ollama".
+# Useful when pointing at a remote Ollama-compatible endpoint that requires auth.
+# api_key = "sk-..."
 ```
 
 ## Examples
@@ -212,9 +215,36 @@ All three accept `--endpoint <url>` (default `http://localhost:11434`).
 
 When you `crig jack` into an `Ollama` construct, crig will:
 
-1. Check whether ollama is already reachable at the construct's endpoint.
-2. If yes, use it as-is and leave it running after you exit.
-3. If no, spawn `ollama serve` for the session and stop it when you jack out.
+1. Check whether the endpoint host is local (loopback) or remote.
+2. **Local endpoint** (e.g. `http://localhost:11434`):
+   - If ollama is already reachable, use it as-is and leave it running after you exit.
+   - Otherwise spawn `ollama serve` for the session and stop it when you jack out.
+   - Pull the requested model on demand via `ollama pull` if it is not present.
+3. **Remote endpoint** (e.g. `https://llm.example.com/`):
+   - Verify reachability (TCP probe; default port 443 for `https://`, 11434 for `http://`).
+   - Do **not** start a local `ollama serve` or attempt `ollama pull`.
+
+### Auth token for Ollama-compatible endpoints
+
+The Ollama LLM type accepts an optional API token. crig passes it to the agent
+as the `ANTHROPIC_AUTH_TOKEN` environment variable (defaulting to the literal
+string `"ollama"` when unset, which is what a vanilla local Ollama expects).
+
+You can set it interactively via `crig config`, or directly in `config.toml`:
+
+```toml
+[constructs.llm_config]
+type = "ollama"
+endpoint = "https://llm.example.com/"
+model = "gemma3:27b"
+api_key = "sk-..."
+```
+
+crig configures the agent process by **setting environment variables directly on
+the spawned child** (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`). No `settings.json` is written
+to disk, so the token never lands on the filesystem and your persistent
+`~/.claude/settings.json` is left untouched.
 
 ## Development
 
