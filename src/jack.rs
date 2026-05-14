@@ -25,7 +25,7 @@ struct ClaudeApiBackend {
     model: String,
 }
 
-struct LocalLLMBackend {
+struct AnthropicCompatibleBackend {
     endpoint: String,
     model: String,
 }
@@ -49,7 +49,7 @@ impl LLMBackend for ClaudeApiBackend {
     }
 }
 
-impl LLMBackend for LocalLLMBackend {
+impl LLMBackend for AnthropicCompatibleBackend {
     fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<OllamaHandle> {
         println!(">> LLM: {} @ {}", self.model, self.endpoint);
         apply_anthropic_env(cmd, &self.endpoint, None);
@@ -113,7 +113,7 @@ fn backend_from_config(llm_config: &LLMConfig) -> Box<dyn LLMBackend> {
             api_key: api_key.clone(),
             model: model.clone(),
         }),
-        LLMConfig::LocalLLM { endpoint, model } => Box::new(LocalLLMBackend {
+        LLMConfig::AnthropicCompatible { endpoint, model } => Box::new(AnthropicCompatibleBackend {
             endpoint: endpoint.clone(),
             model: model.clone(),
         }),

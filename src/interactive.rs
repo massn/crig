@@ -156,7 +156,7 @@ pub fn configure() -> Result<()> {
             .prompt()?,
     };
 
-    let llm_options = vec!["Claude API", "Local LLM", "Ollama"];
+    let llm_options = vec!["Claude API", "Anthropic-compatible", "Ollama"];
     let llm_choice = Select::new("Select LLM type:", llm_options).prompt()?;
 
     let llm_config = match llm_choice {
@@ -193,13 +193,14 @@ pub fn configure() -> Result<()> {
             }
         }
         _ => {
-            let endpoint = Text::new("Local LLM endpoint:")
+            let endpoint = Text::new("Endpoint URL:")
                 .with_default("http://localhost:8080")
+                .with_help_message("Any Anthropic-compatible endpoint (local or remote)")
                 .prompt()?;
 
             let model = Text::new("Model name:").with_default("llama3").prompt()?;
 
-            LLMConfig::LocalLLM { endpoint, model }
+            LLMConfig::AnthropicCompatible { endpoint, model }
         }
     };
 

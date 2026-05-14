@@ -234,7 +234,7 @@ fn render_connection(f: &mut Frame, construct: &Construct, area: Rect) {
                 )]),
             ]
         }
-        LLMConfig::LocalLLM { .. } | LLMConfig::Ollama { .. } => {
+        LLMConfig::AnthropicCompatible { .. } | LLMConfig::Ollama { .. } => {
             vec![
                 Line::from(""),
                 Line::from(""),
@@ -278,11 +278,11 @@ fn render_llm_box(f: &mut Frame, construct: &Construct, area: Rect) {
                 Line::from(vec![Span::raw(key_status)]),
             ]
         }
-        LLMConfig::LocalLLM { endpoint, model }
+        LLMConfig::AnthropicCompatible { endpoint, model }
         | LLMConfig::Ollama { endpoint, model, .. } => {
             let (header, api_key) = match &construct.llm_config {
                 LLMConfig::Ollama { api_key, .. } => ("🦙 Ollama", api_key.as_ref()),
-                _ => ("🖥️  Local LLM", None),
+                _ => ("🔌 Anthropic-compatible", None),
             };
             let mut lines = vec![
                 Line::from(vec![Span::styled(

@@ -45,7 +45,7 @@ crig config
 You can configure:
 - Construct name (cannot be "default" — that is reserved as an alias for the active construct)
 - Agent type (Claude Code / Custom)
-- LLM type (Claude API / Local LLM)
+- LLM type (Claude API / Anthropic-compatible / Ollama)
 - Detailed settings like API keys and endpoints
 
 ### List and Jack In via TUI
@@ -124,7 +124,7 @@ agent_type = "custom"
 claude_code_path = "/usr/local/bin/claude"
 
 [constructs.llm_config]
-type = "local_llm"
+type = "anthropic_compatible"
 endpoint = "http://localhost:8080"
 model = "llama3"
 
@@ -160,7 +160,7 @@ Claude Code path: claude
 ✓ Construct 'remote' saved successfully!
 ```
 
-### Configuration with Local LLM
+### Configuration with an Anthropic-compatible endpoint
 
 ```bash
 $ crig config
@@ -168,8 +168,8 @@ $ crig config
 
 Construct name: local-llm
 Select agent type: Custom
-Select LLM type: Local LLM
-Local LLM endpoint: http://localhost:8080
+Select LLM type: Anthropic-compatible
+Endpoint URL: http://localhost:8080
 Model name: llama3
 Claude Code path: /usr/local/bin/claude
 
@@ -198,7 +198,7 @@ $ crig jack remote
 ## Supported LLMs
 
 - Claude API (Anthropic)
-- Local LLM (any local LLM endpoint)
+- Anthropic-compatible endpoint (any local or remote `ANTHROPIC_BASE_URL`-compatible server)
 - Ollama (with lifecycle management — crig can start/stop `ollama serve` for you)
 
 ### Ollama control

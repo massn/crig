@@ -38,7 +38,8 @@ pub enum LLMConfig {
         api_key: Option<String>,
         model: String,
     },
-    LocalLLM {
+    #[serde(alias = "local_llm")]
+    AnthropicCompatible {
         endpoint: String,
         model: String,
     },
