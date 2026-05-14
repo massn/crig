@@ -16,6 +16,7 @@ use std::io;
 
 use crate::config::{load_config, AgentType, Config, Construct, LLMConfig};
 use crate::jack::jack_in;
+use crate::ollama;
 
 pub fn show_config() -> Result<()> {
     enable_raw_mode()?;
@@ -221,27 +222,25 @@ fn render_arrow(f: &mut Frame, area: Rect) {
 }
 
 fn render_connection(f: &mut Frame, construct: &Construct, area: Rect) {
-    let lines = match &construct.llm_config {
-        LLMConfig::ClaudeApi { .. } => {
-            vec![
-                Line::from(""),
-                Line::from(""),
-                Line::from(vec![Span::styled(
-                    "◈",
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                )]),
-            ]
-        }
-        LLMConfig::AnthropicCompatible { .. } | LLMConfig::Ollama { .. } => {
-            vec![
-                Line::from(""),
-                Line::from(""),
-                Line::from(vec![Span::styled("🔌", Style::default().fg(Color::Green))]),
-            ]
-        }
+    let endpoint = match &construct.llm_config {
+        LLMConfig::ClaudeApi { .. } => None,
+        LLMConfig::AnthropicCompatible { endpoint, .. }
+        | LLMConfig::Ollama { endpoint, .. } => Some(endpoint.as_str()),
     };
+
+    let marker = match endpoint {
+        Some(ep) if ollama::endpoint_is_local(ep) => {
+            Span::styled("🔌", Style::default().fg(Color::Green))
+        }
+        _ => Span::styled(
+            "◈",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+    };
+
+    let lines = vec![Line::from(""), Line::from(""), Line::from(vec![marker])];
 
     let paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
 
