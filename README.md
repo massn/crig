@@ -6,20 +6,21 @@ CLI tool for managing LLM and Agent configurations. Jack into your custom constr
 
 ## Features
 
-- Jack in: Launch Claude Code with custom construct configurations
-- Easy interactive construct configuration for LLM and Agent settings
+- Jack in: Launch any Anthropic-compatible agent CLI with a chosen LLM backend
+- Interactive construct configuration for agents and LLMs
 - Graphical TUI to visualize and select constructs
-- Written in Rust for high performance
+- Optional lifecycle management for a local Ollama server
+- Written in Rust
 
 ## What is a Construct?
 
-A **construct** is a configured virtual environment (like a profile or preset). In cyberpunk terminology, "the construct" refers to a simulated reality or virtual space. In crig, each construct contains:
+A **construct** is a configured virtual environment (like a profile or preset). In cyberpunk terminology, "the construct" refers to a simulated reality or virtual space. In crig, each construct bundles:
 
-- Agent path (e.g., `claude`, `hermes`)
-- LLM configuration (API or local)
-- Model settings
+- An **agent path** — the CLI executable to launch (e.g. `claude`, `hermes`)
+- An **LLM configuration** — Claude API, an Anthropic-compatible endpoint, or Ollama
+- A **model name** and any auth / endpoint details
 
-Think of it as a complete virtual environment configuration that you "jack into" to work with Claude Code under specific settings.
+You "jack into" a construct to start the agent with that LLM wired up.
 
 ## Installation
 
@@ -33,7 +34,7 @@ cargo build --release
 
 ## Usage
 
-### Create or Update Configuration
+### Create or Update a Construct
 
 Configure constructs interactively:
 
@@ -41,11 +42,18 @@ Configure constructs interactively:
 crig config
 ```
 
-You can configure:
-- Construct name (cannot be "default" — that is reserved as an alias for the active construct)
-- Agent path (path to the agent CLI executable, e.g. `claude`, `hermes`)
-- LLM type (Claude API / Anthropic-compatible / Ollama)
-- Detailed settings like API keys and endpoints
+You will be asked for:
+- **Construct name** (cannot be `default` — that is reserved as an alias for the active construct)
+- **Agent path** — path to the agent CLI executable (e.g. `claude`, `hermes`)
+- **LLM type** — `Claude API`, `Anthropic-compatible`, or `Ollama`
+- Type-specific details (API key, endpoint URL, model name, etc.)
+
+### Remove a Construct
+
+```bash
+crig config remove                 # interactive prompt with tab-completion
+crig config remove my-construct    # remove by name
+```
 
 ### List and Jack In via TUI
 
@@ -60,7 +68,7 @@ crig list
 The TUI consists of three sections:
 
 - **Constructs** — lists all configured constructs. The selected one is highlighted with `▶`. Use `k`/`j` or arrow keys to navigate.
-- **Selected Construct Flow** — visualizes the selected construct as a flow: Local PC (Agent) `>>` connection `>>` LLM. Shows agent type, model name, and API key status.
+- **Selected Construct Flow** — visualizes the construct as `Local PC (Agent) >> connection >> LLM`. The connection marker is `🔌` when the LLM endpoint resolves to localhost, `◈` otherwise (or for the Claude API).
 - **Bottom bar** — keyboard shortcuts.
 
 Press `Enter` to jack into the selected construct. Press `q` or `Esc` to quit.
@@ -70,23 +78,25 @@ Press `Enter` to jack into the selected construct. Press `q` or `Esc` to quit.
 Jack into a construct directly:
 
 ```bash
-# Jack in with the active construct
+# Pick a construct via a tab-completion prompt
 crig jack
+
+# Jack in with the active construct (the `default` alias)
 crig jack default
 
-# Jack in with a specific construct and transmit neural payload
+# Jack in with a specific construct and forward extra arguments to the agent
 crig jack my-construct --help
 crig jack my-construct "write a hello world program"
 ```
 
 The `jack` command will:
-- Initialize neural connection to the specified construct
-- Establish interface through the configured Claude Code path
-- Transmit any payload arguments to Claude Code with construct's LLM settings
+- Resolve the construct (active one by default, or one chosen via tab-completion)
+- Configure the spawned agent process with the construct's LLM settings (env vars and `--model`)
+- Forward any additional arguments to the agent verbatim
 
 ### Custom Config Path
 
-Use a custom config file location:
+Use a custom config file location with the global `--config-path` option:
 
 ```bash
 crig --config-path ~/my-configs/crig.toml config
@@ -181,7 +191,7 @@ $ crig jack remote
 
 >> Jacking in...
 
-# Claude Code starts with the configured construct settings
+# The agent (claude) starts with the construct's LLM wired up
 ```
 
 ## Supported Agents
@@ -199,12 +209,13 @@ Any CLI agent that accepts `--model <name>` and reads `ANTHROPIC_BASE_URL` / `AN
 crig can manage a local Ollama server. Pick `Ollama` as the LLM type in `crig config`, or drive it directly:
 
 ```bash
-crig ollama start    # start `ollama serve` detached (no-op if already running)
-crig ollama status   # show whether ollama is reachable
-crig ollama stop     # stop the server started by `crig ollama start`
+crig ollama start              # start `ollama serve` detached (no-op if already running)
+crig ollama status             # show whether ollama is reachable
+crig ollama stop               # stop the server started by `crig ollama start`
+crig ollama pull <model>       # pull a model into the server (e.g. llama3, llama3:8b)
 ```
 
-All three accept `--endpoint <url>` (default `http://localhost:11434`).
+All subcommands accept `--endpoint <url>` (default `http://localhost:11434`).
 
 When you `crig jack` into an `Ollama` construct, crig will:
 
@@ -234,10 +245,11 @@ api_key = "sk-..."
 ```
 
 crig configures the agent process by **setting environment variables directly on
-the spawned child** (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
-`ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`). No `settings.json` is written
-to disk, so the token never lands on the filesystem and your persistent
-`~/.claude/settings.json` is left untouched.
+the spawned child** — for non-Claude-API backends: `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` (cleared), and
+`CLAUDE_CODE_USE_BEDROCK=0`. No `settings.json` is written to disk, so secrets
+never land on the filesystem and your persistent `~/.claude/settings.json` is
+left untouched.
 
 ## Development
 
