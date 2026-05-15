@@ -16,6 +16,7 @@ CLI tool for managing LLM and Agent configurations. Jack into your custom constr
 
 A **construct** is a configured virtual environment (like a profile or preset). In cyberpunk terminology, "the construct" refers to a simulated reality or virtual space. In crig, each construct bundles:
 
+- An **agent type** — Claude Code or Hermes
 - An **agent path** — the CLI executable to launch (e.g. `claude`, `hermes`)
 - An **LLM configuration** — Claude API, an Anthropic-compatible endpoint, or Ollama
 - A **model name** and any auth / endpoint details
@@ -44,8 +45,9 @@ crig config
 
 You will be asked for:
 - **Construct name** (cannot be `default` — that is reserved as an alias for the active construct)
-- **Agent path** — path to the agent CLI executable (e.g. `claude`, `hermes`)
-- **LLM type** — `Claude API`, `Anthropic-compatible`, or `Ollama`
+- **Agent type** — `Claude Code` or `Hermes`
+- **Agent path** — path to the agent CLI executable (defaults to `claude` / `hermes`)
+- **LLM type** — `Claude API`, `Anthropic-compatible`, or `Ollama` (Hermes hides `Anthropic-compatible`; see below)
 - Type-specific details (API key, endpoint URL, model name, etc.)
 
 ### Remove a Construct
@@ -120,6 +122,7 @@ active_construct = "remote"
 
 [[constructs]]
 name = "remote"
+agent_type = "claude_code"
 agent_path = "claude"
 
 [constructs.llm_config]
@@ -128,7 +131,8 @@ model = "claude-sonnet-4-6"
 
 [[constructs]]
 name = "local"
-agent_path = "hermes"
+agent_type = "claude_code"
+agent_path = "claude"
 
 [constructs.llm_config]
 type = "anthropic_compatible"
@@ -136,7 +140,17 @@ endpoint = "http://localhost:8080"
 model = "llama3"
 
 [[constructs]]
+name = "hermes-cloud"
+agent_type = "hermes"
+agent_path = "hermes"
+
+[constructs.llm_config]
+type = "claude_api"
+model = "claude-sonnet-4-6"
+
+[[constructs]]
 name = "ollama"
+agent_type = "claude_code"
 agent_path = "claude"
 
 [constructs.llm_config]
@@ -157,6 +171,7 @@ $ crig config
 === crig Configuration ===
 
 Construct name: remote
+Select agent type: Claude Code
 Agent path: claude
 Select LLM type: Claude API
 Claude API key (leave empty to use environment variable):
@@ -172,13 +187,32 @@ $ crig config
 === crig Configuration ===
 
 Construct name: local-llm
-Agent path: hermes
+Select agent type: Claude Code
+Agent path: claude
 Select LLM type: Anthropic-compatible
 Endpoint URL: http://localhost:8080
 Model name: llama3
 
 ✓ Construct 'local-llm' saved successfully!
 ```
+
+### Configuration with Hermes
+
+```bash
+$ crig config
+=== crig Configuration ===
+
+Construct name: hermes-cloud
+Select agent type: Hermes
+Agent path: hermes
+Select LLM type: Claude API
+Claude API key (leave empty to use environment variable):
+Model name: claude-sonnet-4-6
+
+✓ Construct 'hermes-cloud' saved successfully!
+```
+
+When you jack in, crig invokes Hermes as `hermes chat --provider <p> --model <m>`. The provider is derived from the LLM type (`anthropic` for `claude_api`, `ollama` for `ollama`).
 
 ### Jacking In
 
@@ -196,7 +230,18 @@ $ crig jack remote
 
 ## Supported Agents
 
-Any CLI agent that accepts `--model <name>` and reads `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` env vars (e.g. `claude`, `hermes`).
+| Agent | Invocation | LLM types supported |
+|---|---|---|
+| **Claude Code** (`claude`) | `<path> --model <m>` + `ANTHROPIC_*` env vars | Claude API, Anthropic-compatible, Ollama |
+| **Hermes** ([NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)) | `<path> chat --provider <p> --model <m>` | Claude API, Ollama |
+
+### Why Hermes can't use `Anthropic-compatible`
+
+Hermes reads its endpoint from `~/.hermes/config.yaml` and ignores `ANTHROPIC_BASE_URL`. crig cannot redirect Hermes to a custom endpoint via env vars, so the `Anthropic-compatible` LLM type is disallowed for Hermes constructs. To use a custom endpoint with Hermes, run `hermes model` (which writes `~/.hermes/config.yaml`) and pick the matching LLM type in crig.
+
+### Hermes × Ollama caveat
+
+crig manages the local `ollama serve` lifecycle and pulls the model, but the Hermes process discovers Ollama through its own `config.yaml`. If `hermes chat` cannot reach the Ollama endpoint, run `hermes model` and point it there.
 
 ## Supported LLMs
 

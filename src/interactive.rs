@@ -3,7 +3,7 @@ use inquire::autocompletion::{Autocomplete, Replacement};
 use inquire::{Confirm, CustomUserError, Select, Text};
 
 use crate::config::{
-    add_or_update_construct, load_config, remove_construct, Construct, LLMConfig,
+    add_or_update_construct, load_config, remove_construct, AgentType, Construct, LLMConfig,
     DEFAULT_OLLAMA_ENDPOINT,
 };
 
@@ -110,41 +110,26 @@ pub fn remove(name: Option<String>) -> Result<()> {
 }
 
 
-pub fn configure() -> Result<()> {
-    println!("=== crig Configuration ===\n");
-
-    let existing_names: Vec<String> = load_config()
-        .map(|c| c.constructs.into_iter().map(|c| c.name).collect())
-        .unwrap_or_default();
-
-    let profile_name = loop {
-        let name = Text::new("Construct name:")
-            .with_default("remote")
-            .prompt()?;
-        if name == "default" {
-            println!("\"default\" is reserved. Please use a different name.");
-        } else if existing_names.contains(&name) {
-            let overwrite = Confirm::new(&format!(
-                "Construct '{}' already exists. Overwrite?",
-                name
-            ))
-            .with_default(false)
-            .prompt()?;
-            if overwrite {
-                break name;
-            }
-        } else {
-            break name;
-        }
+/// Ask the user for an LLM configuration. The list of choices depends on the
+/// agent: Hermes cannot have its endpoint overridden by crig, so we hide the
+/// "Anthropic-compatible" option for Hermes constructs.
+fn prompt_llm_config(agent_type: AgentType) -> Result<LLMConfig> {
+    let llm_options: Vec<&str> = match agent_type {
+        AgentType::ClaudeCode => vec!["Claude API", "Anthropic-compatible", "Ollama"],
+        AgentType::Hermes => vec!["Claude API", "Ollama"],
     };
-
-    let agent_path = Text::new("Agent path (e.g. claude, hermes):")
-        .with_default("claude")
-        .with_help_message("Path to the agent CLI executable")
-        .prompt()?;
-
-    let llm_options = vec!["Claude API", "Anthropic-compatible", "Ollama"];
-    let llm_choice = Select::new("Select LLM type:", llm_options).prompt()?;
+    let help = match agent_type {
+        AgentType::ClaudeCode => None,
+        AgentType::Hermes => Some(
+            "Hermes reads its endpoint from ~/.hermes/config.yaml, so crig cannot override it. \
+             Use `hermes model` to point Hermes at a custom endpoint.",
+        ),
+    };
+    let mut select = Select::new("Select LLM type:", llm_options);
+    if let Some(h) = help {
+        select = select.with_help_message(h);
+    }
+    let llm_choice = select.prompt()?;
 
     let llm_config = match llm_choice {
         "Claude API" => {
@@ -191,8 +176,54 @@ pub fn configure() -> Result<()> {
         }
     };
 
+    Ok(llm_config)
+}
+
+pub fn configure() -> Result<()> {
+    println!("=== crig Configuration ===\n");
+
+    let existing_names: Vec<String> = load_config()
+        .map(|c| c.constructs.into_iter().map(|c| c.name).collect())
+        .unwrap_or_default();
+
+    let profile_name = loop {
+        let name = Text::new("Construct name:")
+            .with_default("remote")
+            .prompt()?;
+        if name == "default" {
+            println!("\"default\" is reserved. Please use a different name.");
+        } else if existing_names.contains(&name) {
+            let overwrite = Confirm::new(&format!(
+                "Construct '{}' already exists. Overwrite?",
+                name
+            ))
+            .with_default(false)
+            .prompt()?;
+            if overwrite {
+                break name;
+            }
+        } else {
+            break name;
+        }
+    };
+
+    let agent_options = vec!["Claude Code", "Hermes"];
+    let agent_choice = Select::new("Select agent type:", agent_options).prompt()?;
+    let agent_type = match agent_choice {
+        "Hermes" => AgentType::Hermes,
+        _ => AgentType::ClaudeCode,
+    };
+
+    let agent_path = Text::new("Agent path:")
+        .with_default(agent_type.default_path())
+        .with_help_message("Path to the agent CLI executable")
+        .prompt()?;
+
+    let llm_config = prompt_llm_config(agent_type)?;
+
     let construct = Construct {
         name: profile_name.clone(),
+        agent_type,
         llm_config,
         agent_path,
     };

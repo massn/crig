@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::process::{Child, Command};
 
-use crate::config::{load_config, get_active_construct, LLMConfig, Construct};
+use crate::config::{get_active_construct, load_config, AgentType, Construct, LLMConfig};
 use crate::interactive;
 use crate::ollama;
 
@@ -14,115 +14,11 @@ enum OllamaHandle {
     OwnedChild(Child),
 }
 
-trait LLMBackend {
-    /// Configure the spawned agent process for this backend. Returns any
-    /// ollama process we own so the caller can tear it down at exit.
-    fn configure(&self, cmd: &mut Command, construct_name: &str) -> Result<OllamaHandle>;
-}
-
-struct ClaudeApiBackend {
-    api_key: Option<String>,
-    model: String,
-}
-
-struct AnthropicCompatibleBackend {
+/// Result of preparing an Ollama backend: the live endpoint plus any owned
+/// `ollama serve` process to tear down on exit.
+struct OllamaPrep {
     endpoint: String,
-    model: String,
-}
-
-struct OllamaBackend {
-    endpoint: String,
-    model: String,
-    api_key: Option<String>,
-}
-
-impl LLMBackend for ClaudeApiBackend {
-    fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<OllamaHandle> {
-        clear_bedrock_env(cmd);
-        set_no_bedrock(cmd);
-        if let Some(key) = &self.api_key {
-            cmd.env("ANTHROPIC_API_KEY", key);
-        }
-        cmd.arg("--model").arg(&self.model);
-        println!(">> LLM: {} (Cloud)", self.model);
-        Ok(OllamaHandle::None)
-    }
-}
-
-impl LLMBackend for AnthropicCompatibleBackend {
-    fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<OllamaHandle> {
-        println!(">> LLM: {} @ {}", self.model, self.endpoint);
-        apply_anthropic_env(cmd, &self.endpoint, None);
-        cmd.arg("--model").arg(ollama::normalize_model(&self.model));
-        Ok(OllamaHandle::None)
-    }
-}
-
-impl LLMBackend for OllamaBackend {
-    fn configure(&self, cmd: &mut Command, _construct_name: &str) -> Result<OllamaHandle> {
-        println!(">> LLM: {} @ {} (Ollama)", self.model, self.endpoint);
-
-        let handle = if ollama::endpoint_is_local(&self.endpoint) {
-            // Local Ollama: start `ollama serve` if needed, and ensure the model.
-            let handle = match ollama::start(&self.endpoint)? {
-                ollama::StartOutcome::AlreadyRunning => {
-                    println!(">> Ollama is already running — leaving it alone.");
-                    OllamaHandle::None
-                }
-                ollama::StartOutcome::Started(child) => {
-                    println!(">> Started `ollama serve` for this session.");
-                    OllamaHandle::OwnedChild(child)
-                }
-            };
-            ollama::ensure_model(&self.endpoint, &self.model)?;
-            handle
-        } else {
-            // Remote endpoint: do not spawn ollama or pull models locally.
-            // Just verify the server is reachable.
-            if !ollama::is_running(&self.endpoint) {
-                anyhow::bail!(
-                    "Remote Ollama endpoint {} is not reachable. Check the URL, your network, and that the server is up.",
-                    self.endpoint
-                );
-            }
-            println!(">> Remote endpoint reachable — skipping local serve / model pull.");
-            OllamaHandle::None
-        };
-
-        apply_anthropic_env(cmd, &self.endpoint, self.api_key.as_deref());
-        cmd.arg("--model").arg(ollama::normalize_model(&self.model));
-
-        Ok(handle)
-    }
-}
-
-/// Point Claude Code at a non-Anthropic OpenAI-compatible endpoint by setting
-/// the env vars it reads on startup. Using direct env vars (instead of writing
-/// a `--settings` JSON file) avoids leaving secrets on disk and avoids
-/// overriding the user's persistent `~/.claude/settings.json`.
-fn apply_anthropic_env(cmd: &mut Command, endpoint: &str, api_key: Option<&str>) {
-    cmd.env("ANTHROPIC_BASE_URL", endpoint);
-    cmd.env("ANTHROPIC_AUTH_TOKEN", api_key.unwrap_or("ollama"));
-    cmd.env("ANTHROPIC_API_KEY", "");
-    cmd.env("CLAUDE_CODE_USE_BEDROCK", "0");
-}
-
-fn backend_from_config(llm_config: &LLMConfig) -> Box<dyn LLMBackend> {
-    match llm_config {
-        LLMConfig::ClaudeApi { api_key, model } => Box::new(ClaudeApiBackend {
-            api_key: api_key.clone(),
-            model: model.clone(),
-        }),
-        LLMConfig::AnthropicCompatible { endpoint, model } => Box::new(AnthropicCompatibleBackend {
-            endpoint: endpoint.clone(),
-            model: model.clone(),
-        }),
-        LLMConfig::Ollama { endpoint, model, api_key } => Box::new(OllamaBackend {
-            endpoint: endpoint.clone(),
-            model: model.clone(),
-            api_key: api_key.clone(),
-        }),
-    }
+    handle: OllamaHandle,
 }
 
 pub fn jack_in(profile_name: Option<&str>, args: &[String]) -> Result<()> {
@@ -148,7 +44,7 @@ pub fn jack_in(profile_name: Option<&str>, args: &[String]) -> Result<()> {
 
     println!(">> Initializing neural connection...");
     println!(">> Construct: {}", construct.name);
-    println!(">> Interface path: {}", construct.agent_path);
+    println!(">> Agent: {} ({})", construct.agent_type.display_name(), construct.agent_path);
 
     establish_connection(&construct, args)?;
 
@@ -157,9 +53,8 @@ pub fn jack_in(profile_name: Option<&str>, args: &[String]) -> Result<()> {
 
 fn establish_connection(construct: &Construct, args: &[String]) -> Result<()> {
     let mut cmd = Command::new(&construct.agent_path);
-    let backend = backend_from_config(&construct.llm_config);
 
-    let ollama_handle = backend.configure(&mut cmd, &construct.name)?;
+    let ollama_handle = configure_agent(&mut cmd, construct.agent_type, &construct.llm_config)?;
 
     cmd.args(args);
 
@@ -184,6 +79,145 @@ fn establish_connection(construct: &Construct, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Configure the spawned agent process based on the (agent_type, llm) combination.
+/// Returns any owned ollama process so the caller can tear it down at exit.
+fn configure_agent(
+    cmd: &mut Command,
+    agent_type: AgentType,
+    llm: &LLMConfig,
+) -> Result<OllamaHandle> {
+    match agent_type {
+        AgentType::ClaudeCode => configure_claude_code(cmd, llm),
+        AgentType::Hermes => configure_hermes(cmd, llm),
+    }
+}
+
+// ---------- Claude Code adapter ----------
+
+fn configure_claude_code(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHandle> {
+    match llm {
+        LLMConfig::ClaudeApi { api_key, model } => {
+            clear_bedrock_env(cmd);
+            set_no_bedrock(cmd);
+            if let Some(key) = api_key {
+                cmd.env("ANTHROPIC_API_KEY", key);
+            }
+            cmd.arg("--model").arg(model);
+            println!(">> LLM: {} (Cloud)", model);
+            Ok(OllamaHandle::None)
+        }
+        LLMConfig::AnthropicCompatible { endpoint, model } => {
+            println!(">> LLM: {} @ {}", model, endpoint);
+            apply_anthropic_env(cmd, endpoint, None);
+            cmd.arg("--model").arg(ollama::normalize_model(model));
+            Ok(OllamaHandle::None)
+        }
+        LLMConfig::Ollama {
+            endpoint,
+            model,
+            api_key,
+        } => {
+            println!(">> LLM: {} @ {} (Ollama)", model, endpoint);
+            let prep = prepare_ollama(endpoint, model)?;
+            apply_anthropic_env(cmd, &prep.endpoint, api_key.as_deref());
+            cmd.arg("--model").arg(ollama::normalize_model(model));
+            Ok(prep.handle)
+        }
+    }
+}
+
+// ---------- Hermes adapter ----------
+//
+// Hermes is invoked as `hermes chat --provider <p> --model <m>`. It does NOT
+// read `ANTHROPIC_BASE_URL` for endpoint overrides — those live in
+// `~/.hermes/config.yaml`. So we only pass auth env vars and the
+// `--provider`/`--model` flags; endpoint configuration is left to Hermes.
+
+fn configure_hermes(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHandle> {
+    cmd.arg("chat");
+    match llm {
+        LLMConfig::ClaudeApi { api_key, model } => {
+            if let Some(key) = api_key {
+                cmd.env("ANTHROPIC_API_KEY", key);
+            }
+            cmd.arg("--provider").arg("anthropic");
+            cmd.arg("--model").arg(model);
+            println!(">> LLM: {} via Hermes (provider=anthropic)", model);
+            Ok(OllamaHandle::None)
+        }
+        LLMConfig::Ollama {
+            endpoint, model, ..
+        } => {
+            // We manage the local Ollama server only — Hermes itself is
+            // responsible for knowing how to reach it (configured via
+            // `hermes model` / ~/.hermes/config.yaml).
+            println!(">> LLM: {} via Hermes (provider=ollama)", model);
+            let prep = prepare_ollama(endpoint, model)?;
+            cmd.arg("--provider").arg("ollama");
+            cmd.arg("--model").arg(ollama::normalize_model(model));
+            println!(
+                ">> Note: Hermes reads its endpoint from ~/.hermes/config.yaml, not from crig.\n\
+                 >>       If it cannot reach {}, run `hermes model` to point it there.",
+                prep.endpoint
+            );
+            Ok(prep.handle)
+        }
+        LLMConfig::AnthropicCompatible { .. } => {
+            anyhow::bail!(
+                "Hermes does not support endpoint override via environment variables.\n\
+                 Configure a custom endpoint with `hermes model` (writes ~/.hermes/config.yaml),\n\
+                 then use a different LLM type in crig (e.g. claude_api) or invoke hermes directly."
+            )
+        }
+    }
+}
+
+// ---------- shared helpers ----------
+
+/// Bring up (or attach to) an Ollama server reachable at `endpoint`, ensuring
+/// `model` is available. For remote endpoints, only reachability is checked.
+fn prepare_ollama(endpoint: &str, model: &str) -> Result<OllamaPrep> {
+    let handle = if ollama::endpoint_is_local(endpoint) {
+        let handle = match ollama::start(endpoint)? {
+            ollama::StartOutcome::AlreadyRunning => {
+                println!(">> Ollama is already running — leaving it alone.");
+                OllamaHandle::None
+            }
+            ollama::StartOutcome::Started(child) => {
+                println!(">> Started `ollama serve` for this session.");
+                OllamaHandle::OwnedChild(child)
+            }
+        };
+        ollama::ensure_model(endpoint, model)?;
+        handle
+    } else {
+        if !ollama::is_running(endpoint) {
+            anyhow::bail!(
+                "Remote Ollama endpoint {} is not reachable. Check the URL, your network, and that the server is up.",
+                endpoint
+            );
+        }
+        println!(">> Remote endpoint reachable — skipping local serve / model pull.");
+        OllamaHandle::None
+    };
+    Ok(OllamaPrep {
+        endpoint: endpoint.to_string(),
+        handle,
+    })
+}
+
+/// Point a Claude-Code-compatible agent at a non-Anthropic OpenAI/Anthropic
+/// compatible endpoint by setting the env vars it reads on startup. Using
+/// direct env vars (instead of writing a `--settings` JSON file) avoids
+/// leaving secrets on disk and avoids overriding the user's persistent
+/// `~/.claude/settings.json`.
+fn apply_anthropic_env(cmd: &mut Command, endpoint: &str, api_key: Option<&str>) {
+    cmd.env("ANTHROPIC_BASE_URL", endpoint);
+    cmd.env("ANTHROPIC_AUTH_TOKEN", api_key.unwrap_or("ollama"));
+    cmd.env("ANTHROPIC_API_KEY", "");
+    cmd.env("CLAUDE_CODE_USE_BEDROCK", "0");
+}
+
 fn set_no_bedrock(cmd: &mut Command) {
     cmd.env("CLAUDE_CODE_USE_BEDROCK", "0");
 }
@@ -191,4 +225,3 @@ fn set_no_bedrock(cmd: &mut Command) {
 fn clear_bedrock_env(cmd: &mut Command) {
     cmd.env_remove("CLAUDE_CODE_USE_BEDROCK");
 }
-
