@@ -3,7 +3,7 @@ use inquire::autocompletion::{Autocomplete, Replacement};
 use inquire::{Confirm, CustomUserError, Select, Text};
 
 use crate::config::{
-    add_or_update_construct, load_config, remove_construct, AgentType, Construct, LLMConfig,
+    add_or_update_construct, load_config, remove_construct, Construct, LLMConfig,
     DEFAULT_OLLAMA_ENDPOINT,
 };
 
@@ -138,23 +138,10 @@ pub fn configure() -> Result<()> {
         }
     };
 
-    let agent_options = vec!["Claude Code", "Custom"];
-    let agent_choice = Select::new("Select agent type:", agent_options).prompt()?;
-
-    let agent_type = match agent_choice {
-        "Claude Code" => AgentType::ClaudeCode,
-        _ => AgentType::Custom,
-    };
-
-    let agent_path = match agent_type {
-        AgentType::ClaudeCode => Text::new("Claude Code path:")
-            .with_default("claude")
-            .with_help_message("Path to Claude Code CLI executable")
-            .prompt()?,
-        AgentType::Custom => Text::new("Custom agent path:")
-            .with_help_message("Path to custom agent executable")
-            .prompt()?,
-    };
+    let agent_path = Text::new("Agent path (e.g. claude, hermes):")
+        .with_default("claude")
+        .with_help_message("Path to the agent CLI executable")
+        .prompt()?;
 
     let llm_options = vec!["Claude API", "Anthropic-compatible", "Ollama"];
     let llm_choice = Select::new("Select LLM type:", llm_options).prompt()?;
@@ -206,7 +193,6 @@ pub fn configure() -> Result<()> {
 
     let construct = Construct {
         name: profile_name.clone(),
-        agent_type,
         llm_config,
         agent_path,
     };

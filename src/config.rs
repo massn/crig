@@ -14,7 +14,6 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Construct {
     pub name: String,
-    pub agent_type: AgentType,
     pub llm_config: LLMConfig,
     #[serde(default = "default_agent_path", alias = "claude_code_path")]
     pub agent_path: String,
@@ -22,13 +21,6 @@ pub struct Construct {
 
 fn default_agent_path() -> String {
     "claude".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentType {
-    ClaudeCode,
-    Custom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +51,6 @@ impl Default for Config {
             active_construct: "remote".to_string(),
             constructs: vec![Construct {
                 name: "remote".to_string(),
-                agent_type: AgentType::ClaudeCode,
                 llm_config: LLMConfig::ClaudeApi {
                     api_key: None,
                     model: "claude-sonnet-4-6".to_string(),

@@ -15,10 +15,9 @@ CLI tool for managing LLM and Agent configurations. Jack into your custom constr
 
 A **construct** is a configured virtual environment (like a profile or preset). In cyberpunk terminology, "the construct" refers to a simulated reality or virtual space. In crig, each construct contains:
 
-- Agent type (e.g., Claude Code)
+- Agent path (e.g., `claude`, `hermes`)
 - LLM configuration (API or local)
 - Model settings
-- Interface path (Claude Code executable)
 
 Think of it as a complete virtual environment configuration that you "jack into" to work with Claude Code under specific settings.
 
@@ -44,7 +43,7 @@ crig config
 
 You can configure:
 - Construct name (cannot be "default" — that is reserved as an alias for the active construct)
-- Agent type (Claude Code / Custom)
+- Agent path (path to the agent CLI executable, e.g. `claude`, `hermes`)
 - LLM type (Claude API / Anthropic-compatible / Ollama)
 - Detailed settings like API keys and endpoints
 
@@ -111,8 +110,7 @@ active_construct = "remote"
 
 [[constructs]]
 name = "remote"
-agent_type = "claude_code"
-claude_code_path = "claude"
+agent_path = "claude"
 
 [constructs.llm_config]
 type = "claude_api"
@@ -120,8 +118,7 @@ model = "claude-sonnet-4-6"
 
 [[constructs]]
 name = "local"
-agent_type = "custom"
-claude_code_path = "/usr/local/bin/claude"
+agent_path = "hermes"
 
 [constructs.llm_config]
 type = "anthropic_compatible"
@@ -130,7 +127,6 @@ model = "llama3"
 
 [[constructs]]
 name = "ollama"
-agent_type = "claude_code"
 agent_path = "claude"
 
 [constructs.llm_config]
@@ -151,11 +147,10 @@ $ crig config
 === crig Configuration ===
 
 Construct name: remote
-Select agent type: Claude Code
+Agent path: claude
 Select LLM type: Claude API
 Claude API key (leave empty to use environment variable):
 Model name: claude-sonnet-4-6
-Claude Code path: claude
 
 ✓ Construct 'remote' saved successfully!
 ```
@@ -167,11 +162,10 @@ $ crig config
 === crig Configuration ===
 
 Construct name: local-llm
-Select agent type: Custom
+Agent path: hermes
 Select LLM type: Anthropic-compatible
 Endpoint URL: http://localhost:8080
 Model name: llama3
-Claude Code path: /usr/local/bin/claude
 
 ✓ Construct 'local-llm' saved successfully!
 ```
@@ -192,8 +186,7 @@ $ crig jack remote
 
 ## Supported Agents
 
-- Claude Code
-- Custom (for future extensions)
+Any CLI agent that accepts `--model <name>` and reads `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` env vars (e.g. `claude`, `hermes`).
 
 ## Supported LLMs
 

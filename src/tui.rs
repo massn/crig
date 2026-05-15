@@ -14,7 +14,7 @@ use ratatui::{
 };
 use std::io;
 
-use crate::config::{load_config, AgentType, Config, Construct, LLMConfig};
+use crate::config::{load_config, Config, Construct, LLMConfig};
 use crate::jack::jack_in;
 use crate::ollama;
 
@@ -171,15 +171,10 @@ fn render_selected_construct(f: &mut Frame, config: &Config, selected_index: usi
 }
 
 fn render_agent_box(f: &mut Frame, construct: &Construct, area: Rect) {
-    let agent_icon = match construct.agent_type {
-        AgentType::ClaudeCode => "🤖",
-        AgentType::Custom => "⚙️",
-    };
-
-    let agent_name = match construct.agent_type {
-        AgentType::ClaudeCode => "Claude Code",
-        AgentType::Custom => "Custom",
-    };
+    let agent_name = std::path::Path::new(&construct.agent_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(construct.agent_path.as_str());
 
     let lines = vec![
         Line::from(vec![Span::styled(
@@ -190,10 +185,10 @@ fn render_agent_box(f: &mut Frame, construct: &Construct, area: Rect) {
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            format!("{} Agent", agent_icon),
+            "🤖 Agent",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
-        Line::from(vec![Span::raw(agent_name)]),
+        Line::from(vec![Span::raw(agent_name.to_string())]),
     ];
 
     let paragraph = Paragraph::new(Text::from(lines))
