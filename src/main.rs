@@ -3,6 +3,7 @@ mod config;
 mod interactive;
 mod jack;
 mod ollama;
+mod proxy;
 mod tui;
 
 use anyhow::Result;

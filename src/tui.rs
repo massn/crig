@@ -219,7 +219,7 @@ fn render_arrow(f: &mut Frame, area: Rect) {
 
 fn render_connection(f: &mut Frame, construct: &Construct, area: Rect) {
     let endpoint = match &construct.llm_config {
-        LLMConfig::ClaudeApi { .. } => None,
+        LLMConfig::ClaudeApi { .. } | LLMConfig::Router { .. } => None,
         LLMConfig::AnthropicCompatible { endpoint, .. }
         | LLMConfig::Ollama { endpoint, .. } => Some(endpoint.as_str()),
     };
@@ -319,6 +319,55 @@ fn render_llm_box(f: &mut Frame, construct: &Construct, area: Rect) {
                 lines.push(Line::from(vec![Span::raw(status)]));
             }
             lines
+        }
+        LLMConfig::Router {
+            weak,
+            strong,
+            thresholds,
+        } => {
+            let model_of = |llm: &LLMConfig| -> String {
+                match llm {
+                    LLMConfig::ClaudeApi { model, .. }
+                    | LLMConfig::AnthropicCompatible { model, .. }
+                    | LLMConfig::Ollama { model, .. } => model.clone(),
+                    LLMConfig::Router { .. } => "router".to_string(),
+                }
+            };
+            vec![
+                Line::from(vec![Span::styled(
+                    "🔀 Router",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Magenta),
+                )]),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "🐢 Weak",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(vec![Span::styled(
+                    model_of(weak),
+                    Style::default().fg(Color::Green),
+                )]),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "🚀 Strong",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(vec![Span::styled(
+                    model_of(strong),
+                    Style::default().fg(Color::Cyan),
+                )]),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "⚖️  Escalate",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(vec![Span::raw(format!(
+                    "msgs>{} ~tok>{}",
+                    thresholds.max_messages, thresholds.max_input_tokens
+                ))]),
+            ]
         }
     };
 

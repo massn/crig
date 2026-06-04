@@ -67,6 +67,53 @@ pub enum LLMConfig {
         #[serde(default)]
         api_key: Option<String>,
     },
+    /// Route each request to `weak` by default, escalating to `strong` once a
+    /// request crosses one of the difficulty thresholds. Backed by a local
+    /// proxy started at jack-in time.
+    Router {
+        weak: Box<LLMConfig>,
+        strong: Box<LLMConfig>,
+        #[serde(default)]
+        thresholds: RouterThresholds,
+    },
+}
+
+/// Rule-based escalation thresholds for `LLMConfig::Router`. Any threshold met
+/// promotes a request from the weak backend to the strong one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouterThresholds {
+    /// Escalate when the message count exceeds this. 0 disables the rule.
+    #[serde(default = "default_max_messages")]
+    pub max_messages: usize,
+    /// Escalate when estimated input tokens (messages only, chars/4) exceed
+    /// this. 0 disables the rule.
+    #[serde(default = "default_max_input_tokens")]
+    pub max_input_tokens: usize,
+    /// Escalate when a prior tool_result in the history is an error.
+    #[serde(default = "default_escalate_on_tool_error")]
+    pub escalate_on_tool_error: bool,
+}
+
+fn default_max_messages() -> usize {
+    12
+}
+
+fn default_max_input_tokens() -> usize {
+    20000
+}
+
+fn default_escalate_on_tool_error() -> bool {
+    true
+}
+
+impl Default for RouterThresholds {
+    fn default() -> Self {
+        RouterThresholds {
+            max_messages: default_max_messages(),
+            max_input_tokens: default_max_input_tokens(),
+            escalate_on_tool_error: default_escalate_on_tool_error(),
+        }
+    }
 }
 
 pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434";

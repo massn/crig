@@ -10,6 +10,7 @@ CLI tool for managing LLM and Agent configurations. Jack into your custom constr
 - Interactive construct configuration for agents and LLMs
 - Graphical TUI to visualize and select constructs
 - Optional lifecycle management for a local Ollama server
+- **Router**: rule-based escalation that serves easy requests from a weak LLM and promotes hard ones to a strong LLM, mid-conversation
 - Written in Rust
 
 ## What is a Construct?
@@ -18,7 +19,7 @@ A **construct** is a configured virtual environment (like a profile or preset). 
 
 - An **agent type** — Claude Code or Hermes
 - An **agent path** — the CLI executable to launch (e.g. `claude`, `hermes`)
-- An **LLM configuration** — Claude API, an Anthropic-compatible endpoint, or Ollama
+- An **LLM configuration** — Claude API, an Anthropic-compatible endpoint, Ollama, or a **Router** that picks between two of the above per request
 - A **model name** and any auth / endpoint details
 
 You "jack into" a construct to start the agent with that LLM wired up.
@@ -160,6 +161,33 @@ model = "llama3"
 # Optional. Sent as ANTHROPIC_AUTH_TOKEN to the agent. Defaults to "ollama".
 # Useful when pointing at a remote Ollama-compatible endpoint that requires auth.
 # api_key = "sk-..."
+
+[[constructs]]
+name = "auto"
+agent_type = "claude_code"
+agent_path = "claude"
+
+[constructs.llm_config]
+type = "router"
+
+# The default ("weak") backend for easy requests.
+[constructs.llm_config.weak]
+type = "anthropic_compatible"
+endpoint = "http://localhost:8080"
+model = "llama3"
+
+# The backend hard requests escalate to.
+[constructs.llm_config.strong]
+type = "claude_api"
+model = "claude-opus-4-6"
+
+# Optional. Any rule met promotes a request to `strong`. Omit the table or
+# any field to use defaults (max_messages = 12, max_input_tokens = 20000,
+# escalate_on_tool_error = true). Set a numeric threshold to 0 to disable it.
+[constructs.llm_config.thresholds]
+max_messages = 12
+max_input_tokens = 20000
+escalate_on_tool_error = true
 ```
 
 ## Examples
@@ -248,6 +276,7 @@ crig manages the local `ollama serve` lifecycle and pulls the model, but the Her
 - Claude API (Anthropic)
 - Anthropic-compatible endpoint (any local or remote `ANTHROPIC_BASE_URL`-compatible server)
 - Ollama (with lifecycle management — crig can start/stop `ollama serve` for you)
+- Router (rule-based weak → strong escalation between two of the above; see [Router](#router-weak--strong-escalation))
 
 ### Ollama control
 
@@ -295,6 +324,72 @@ the spawned child** — for non-Claude-API backends: `ANTHROPIC_BASE_URL`,
 `CLAUDE_CODE_USE_BEDROCK=0`. No `settings.json` is written to disk, so secrets
 never land on the filesystem and your persistent `~/.claude/settings.json` is
 left untouched.
+
+## Router: weak → strong escalation
+
+The `router` LLM type serves easy requests from a cheap/weak backend and
+automatically promotes hard ones to a stronger backend — **without breaking the
+conversation**. It is ideal for "start small, scale up when the task gets
+difficult" workflows.
+
+### How it works
+
+When you `crig jack` into a router construct, crig starts a small local proxy on
+an ephemeral `127.0.0.1` port and points the agent's `ANTHROPIC_BASE_URL` at it.
+The proxy is **not** an LLM — it speaks the Anthropic Messages API and, for every
+request, inspects the conversation and forwards it to either the `weak` or
+`strong` backend (rewriting the `model` field and auth headers for the chosen
+target). Responses, including SSE streams, are passed straight through.
+
+```
+agent (claude) ──▶ crig router proxy ──┬──▶ weak  (e.g. local llama3)
+                   inspect & decide     └──▶ strong (e.g. claude-opus)
+```
+
+Routing is **stateless**: each Anthropic request already carries the full
+conversation history, so the proxy decides from the history alone. This means
+once a conversation has grown past a threshold it naturally stays on `strong`,
+and no session state is tracked. The proxy (and any Ollama server it started) is
+shut down automatically when the agent exits.
+
+The chosen backend is logged to stderr per request:
+
+```
+>> [crig proxy] route=weak msgs=3 ~tokens=412
+>> [crig proxy] route=strong msgs=14 ~tokens=22871
+```
+
+### Escalation rules
+
+A request is promoted to `strong` when **any** of the following thresholds is
+met. All are configurable under `[constructs.llm_config.thresholds]`; omit a
+field to use its default, or set a numeric threshold to `0` to disable that rule.
+
+| Field | Default | Escalates when… |
+|---|---|---|
+| `max_messages` | `12` | the conversation has more than this many messages |
+| `max_input_tokens` | `20000` | estimated input tokens (message text only, `chars / 4`) exceed this |
+| `escalate_on_tool_error` | `true` | any prior `tool_result` in the history is flagged `is_error` |
+
+### Backends
+
+`weak` and `strong` each accept any non-router LLM config (`claude_api`,
+`anthropic_compatible`, or `ollama`) with the same fields used elsewhere:
+
+- `claude_api` — uses `https://api.anthropic.com`. The key comes from the
+  backend's `api_key` field, falling back to the `ANTHROPIC_API_KEY` environment
+  variable.
+- `anthropic_compatible` / `ollama` — forwarded to the given `endpoint`. As with
+  standalone Ollama constructs, the endpoint must already speak the Anthropic
+  Messages API. Local Ollama servers are started/stopped and models pulled the
+  same way they are for a plain `ollama` construct.
+
+> **Notes**
+> - The router is only supported for `claude_code` agents (Hermes manages its
+>   own endpoint and ignores `ANTHROPIC_BASE_URL`).
+> - Routers cannot be nested inside another router.
+> - Router constructs are configured by editing `config.toml` directly; the
+>   interactive `crig config` wizard does not yet build them.
 
 ## Development
 

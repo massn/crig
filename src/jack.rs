@@ -4,6 +4,7 @@ use std::process::{Child, Command};
 use crate::config::{get_active_construct, load_config, AgentType, Construct, LLMConfig};
 use crate::interactive;
 use crate::ollama;
+use crate::proxy;
 
 /// Ownership of an auto-started ollama process. Held for the lifetime of
 /// a single `jack` invocation so we can shut it down when the agent exits.
@@ -12,6 +13,41 @@ enum OllamaHandle {
     None,
     /// We spawned `ollama serve`; kill it when `jack` ends.
     OwnedChild(Child),
+}
+
+/// Resources started for one `jack` invocation that must be torn down when the
+/// agent exits: any owned `ollama serve` processes plus an optional router proxy.
+struct Session {
+    ollama: Vec<Child>,
+    proxy: Option<proxy::ProxyHandle>,
+}
+
+impl Session {
+    fn empty() -> Self {
+        Session {
+            ollama: Vec::new(),
+            proxy: None,
+        }
+    }
+
+    fn from_handle(handle: OllamaHandle) -> Self {
+        let mut s = Session::empty();
+        if let OllamaHandle::OwnedChild(child) = handle {
+            s.ollama.push(child);
+        }
+        s
+    }
+
+    fn shutdown(self) {
+        if let Some(proxy) = self.proxy {
+            println!(">> Stopping router proxy...");
+            proxy.stop();
+        }
+        for child in self.ollama {
+            println!(">> Stopping ollama (started by this session)...");
+            let _ = ollama::stop_child(child);
+        }
+    }
 }
 
 /// Result of preparing an Ollama backend: the live endpoint plus any owned
@@ -54,7 +90,7 @@ pub fn jack_in(profile_name: Option<&str>, args: &[String]) -> Result<()> {
 fn establish_connection(construct: &Construct, args: &[String]) -> Result<()> {
     let mut cmd = Command::new(&construct.agent_path);
 
-    let ollama_handle = configure_agent(&mut cmd, construct.agent_type, &construct.llm_config)?;
+    let session = configure_agent(&mut cmd, construct.agent_type, &construct.llm_config)?;
 
     cmd.args(args);
 
@@ -67,10 +103,7 @@ fn establish_connection(construct: &Construct, args: &[String]) -> Result<()> {
         .status()
         .context("Connection failed - interface unreachable")?;
 
-    if let OllamaHandle::OwnedChild(child) = ollama_handle {
-        println!(">> Stopping ollama (started by this session)...");
-        let _ = ollama::stop_child(child);
-    }
+    session.shutdown();
 
     if !status.success() {
         anyhow::bail!("Connection terminated with status: {}", status);
@@ -85,7 +118,7 @@ fn configure_agent(
     cmd: &mut Command,
     agent_type: AgentType,
     llm: &LLMConfig,
-) -> Result<OllamaHandle> {
+) -> Result<Session> {
     match agent_type {
         AgentType::ClaudeCode => configure_claude_code(cmd, llm),
         AgentType::Hermes => configure_hermes(cmd, llm),
@@ -94,7 +127,7 @@ fn configure_agent(
 
 // ---------- Claude Code adapter ----------
 
-fn configure_claude_code(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHandle> {
+fn configure_claude_code(cmd: &mut Command, llm: &LLMConfig) -> Result<Session> {
     match llm {
         LLMConfig::ClaudeApi { api_key, model } => {
             clear_bedrock_env(cmd);
@@ -104,13 +137,13 @@ fn configure_claude_code(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHan
             }
             cmd.arg("--model").arg(model);
             println!(">> LLM: {} (Cloud)", model);
-            Ok(OllamaHandle::None)
+            Ok(Session::empty())
         }
         LLMConfig::AnthropicCompatible { endpoint, model } => {
             println!(">> LLM: {} @ {}", model, endpoint);
             apply_anthropic_env(cmd, endpoint, None);
             cmd.arg("--model").arg(ollama::normalize_model(model));
-            Ok(OllamaHandle::None)
+            Ok(Session::empty())
         }
         LLMConfig::Ollama {
             endpoint,
@@ -121,9 +154,90 @@ fn configure_claude_code(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHan
             let prep = prepare_ollama(endpoint, model)?;
             apply_anthropic_env(cmd, &prep.endpoint, api_key.as_deref());
             cmd.arg("--model").arg(ollama::normalize_model(model));
-            Ok(prep.handle)
+            Ok(Session::from_handle(prep.handle))
+        }
+        LLMConfig::Router {
+            weak,
+            strong,
+            thresholds,
+        } => {
+            let mut session = Session::empty();
+            let weak_backend = resolve_backend(weak, &mut session)?;
+            let strong_backend = resolve_backend(strong, &mut session)?;
+            let placeholder_model = weak_backend.model.clone();
+
+            println!(
+                ">> Router: weak={} → strong={} (escalate at msgs>{}, ~tokens>{}, tool_error={})",
+                weak_backend.model,
+                strong_backend.model,
+                thresholds.max_messages,
+                thresholds.max_input_tokens,
+                thresholds.escalate_on_tool_error,
+            );
+
+            let handle = proxy::start(proxy::ResolvedRouter {
+                weak: weak_backend,
+                strong: strong_backend,
+                thresholds: thresholds.clone(),
+            })?;
+            let url = format!("http://{}", handle.addr);
+            println!(">> Router proxy listening on {}", url);
+
+            apply_anthropic_env(cmd, &url, Some("crig-proxy"));
+            cmd.arg("--model").arg(placeholder_model);
+
+            session.proxy = Some(handle);
+            Ok(session)
         }
     }
+}
+
+/// Resolve a single LLM backend into a proxy `Backend`, bringing up any local
+/// Ollama server it needs (tracked in `session` for teardown).
+fn resolve_backend(llm: &LLMConfig, session: &mut Session) -> Result<proxy::Backend> {
+    match llm {
+        LLMConfig::ClaudeApi { api_key, model } => {
+            let key = api_key
+                .clone()
+                .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+                .filter(|s| !s.is_empty())
+                .context(
+                    "Router claude_api backend needs an api_key (in config or ANTHROPIC_API_KEY)",
+                )?;
+            Ok(proxy::Backend {
+                base_url: "https://api.anthropic.com".to_string(),
+                auth: proxy::Auth::ApiKey(key),
+                model: model.clone(),
+            })
+        }
+        LLMConfig::AnthropicCompatible { endpoint, model } => Ok(proxy::Backend {
+            base_url: trim_url(endpoint),
+            auth: proxy::Auth::Bearer("ollama".to_string()),
+            model: ollama::normalize_model(model),
+        }),
+        LLMConfig::Ollama {
+            endpoint,
+            model,
+            api_key,
+        } => {
+            let prep = prepare_ollama(endpoint, model)?;
+            if let OllamaHandle::OwnedChild(child) = prep.handle {
+                session.ollama.push(child);
+            }
+            Ok(proxy::Backend {
+                base_url: trim_url(&prep.endpoint),
+                auth: proxy::Auth::Bearer(api_key.clone().unwrap_or_else(|| "ollama".to_string())),
+                model: ollama::normalize_model(model),
+            })
+        }
+        LLMConfig::Router { .. } => {
+            anyhow::bail!("A Router LLM config cannot be nested inside another Router")
+        }
+    }
+}
+
+fn trim_url(url: &str) -> String {
+    url.trim_end_matches('/').to_string()
 }
 
 // ---------- Hermes adapter ----------
@@ -133,7 +247,7 @@ fn configure_claude_code(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHan
 // `~/.hermes/config.yaml`. So we only pass auth env vars and the
 // `--provider`/`--model` flags; endpoint configuration is left to Hermes.
 
-fn configure_hermes(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHandle> {
+fn configure_hermes(cmd: &mut Command, llm: &LLMConfig) -> Result<Session> {
     cmd.arg("chat");
     match llm {
         LLMConfig::ClaudeApi { api_key, model } => {
@@ -143,7 +257,7 @@ fn configure_hermes(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHandle> 
             cmd.arg("--provider").arg("anthropic");
             cmd.arg("--model").arg(model);
             println!(">> LLM: {} via Hermes (provider=anthropic)", model);
-            Ok(OllamaHandle::None)
+            Ok(Session::empty())
         }
         LLMConfig::Ollama {
             endpoint, model, ..
@@ -160,13 +274,18 @@ fn configure_hermes(cmd: &mut Command, llm: &LLMConfig) -> Result<OllamaHandle> 
                  >>       If it cannot reach {}, run `hermes model` to point it there.",
                 prep.endpoint
             );
-            Ok(prep.handle)
+            Ok(Session::from_handle(prep.handle))
         }
         LLMConfig::AnthropicCompatible { .. } => {
             anyhow::bail!(
                 "Hermes does not support endpoint override via environment variables.\n\
                  Configure a custom endpoint with `hermes model` (writes ~/.hermes/config.yaml),\n\
                  then use a different LLM type in crig (e.g. claude_api) or invoke hermes directly."
+            )
+        }
+        LLMConfig::Router { .. } => {
+            anyhow::bail!(
+                "Hermes does not support the router LLM config. Use a claude_code agent for routing."
             )
         }
     }
